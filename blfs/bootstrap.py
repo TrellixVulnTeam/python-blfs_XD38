@@ -33,7 +33,6 @@ BASEURL = 'https://www.linuxfromscratch.org/blfs/view/stable/'  # URL containing
 #BASEURL = 'https://www.linuxfromscratch.org/blfs/view/stable-systemd/' # uncomment this line if you are using the Systemd BLFS build.
 
 scheme = {}
-pkg_count = 0
 headers = {
     'User-Agent':'Mozilla/5.0 (Windows NT x.y; rv:10.0) Gecko/20100101 Firefox/10.0'
 }
@@ -104,37 +103,41 @@ def package_collect(package, tag_class, tag):
     print("Downloading info for {0}".format(name))
     scheme[name] = {'name': name, 'url': FTP_URL_filter(urls), 'Dependencies': deps, 'Commands': commands, 'Hashes': hashes, 'kconf': kconf, 'type': 'BLFS'}
 
+def main():
+    res = url_get(BASEURL + 'longindex.html')
+    pkg_count = 0
+    soup = Bs4(res.text, 'html.parser')
+    el = soup.find('a', attrs={"id": "package-index"}).parent.next_sibling.next_sibling
+    print("Collecting base URLs....")
+    # for every url... check if has href... if not add to array
+    links = list(map(lambda v: BASEURL + v['href'] if not '#' in v['href'] else None, el.find_all('a', href=True)))
 
-res = url_get(BASEURL + 'longindex.html')  # Begin...
-soup = Bs4(res.text, 'html.parser')
-el = soup.find('a', attrs={"id": "package-index"}).parent.next_sibling.next_sibling
-print("Collecting base URLs....")
-# for every url... check if has href... if not add to array
-links = list(map(lambda v: BASEURL + v['href'] if not '#' in v['href'] else None, el.find_all('a', href=True)))
 
+    threads = ThreadPool(10).imap_unordered(url_get, list(filter(None, links)))
 
-threads = ThreadPool(10).imap_unordered(url_get, list(filter(None, links)))
+    for a in threads:
+        pkg_count += 1
+        soup = Bs4(a.text, 'html.parser')  # get webpage contents
 
-for a in threads:
-    pkg_count += 1
-    soup = Bs4(a.text, 'html.parser')  # get webpage contents
+        if len(soup.find_all('div', class_='sect2')) > 1:  # if soup is module instead of std package
+            for module in soup.find_all('div', class_='sect2'):
+                if module.find_all('div', class_='package'):  # limit to modules only
+                    package_collect(module, "sect2", "h2")  # call function on module
+        else:
+            package_collect(soup, "sect1", "h1")  # call function on std package
 
-    if len(soup.find_all('div', class_='sect2')) > 1:  # if soup is module instead of std package
-        for module in soup.find_all('div', class_='sect2'):
-            if module.find_all('div', class_='package'):  # limit to modules only
-                package_collect(module, "sect2", "h2")  # call function on module
+    if pkg_count == len(list(filter(None, links))):
+        print('All packages successfully downloaded!')
     else:
-        package_collect(soup, "sect1", "h1")  # call function on std package
+        print('Not all packages have been downloaded...')
+        print('Number of urls: {}'.format(str(len(links))))
+        print('Number of downloaded packages: {}'.format(pkg_count))
 
-if pkg_count == len(list(filter(None, links))):
-    print('All packages successfully downloaded!')
-else:
-    print('Not all packages have been downloaded...')
-    print('Number of urls: {}'.format(str(len(links))))
-    print('Number of downloaded packages: {}'.format(pkg_count))
+    with open('dependencies.json', 'w+') as b:  # dump info to json file
+        json.dump(scheme, b)
 
-with open('dependencies.json', 'w+') as b:  # dump info to json file
-    json.dump(scheme, b)
+    with open('installed', 'w') as i:
+        i.write('')
 
-with open('installed', 'w') as i:
-    i.write('')
+if __name__ == '__main__':
+    main()
